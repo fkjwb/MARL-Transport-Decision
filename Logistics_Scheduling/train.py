@@ -497,7 +497,7 @@ def main():
     term_counts: Dict[str, int] = {}
     term_f_list: List[float] = []
     term_level1_inv_after_list: List[float] = []
-    success_tplus1_list: List[float] = []
+    success_tstar_list: List[float] = []
 
     # reward parts
     reward_sums = {
@@ -540,7 +540,7 @@ def main():
             term_counts = {}
             term_f_list = []
             term_level1_inv_after_list = []
-            success_tplus1_list = []
+            success_tstar_list = []
 
             for _k in reward_sums:
                 reward_sums[_k] = 0.0
@@ -631,10 +631,11 @@ def main():
                             term_level1_inv_after_list.append(float(np.asarray(Wi_after)[level1_rows, :].sum()))
                         else:
                             term_level1_inv_after_list.append(0.0)
-                    # 3) 因 success 终止的回合的 t+1
+                    # 3) 因 success 终止的回合记录 T*（由 env 在回合内维护）
                     if reason == "success":
-                        # step() 之后 env._t 已自增，可视为 t+1
-                        success_tplus1_list.append(float(getattr(env, "_t", 0)))
+                        t_star = info.get("T_star", getattr(env, "_t_star", None))
+                        if t_star is not None:
+                            success_tstar_list.append(float(t_star))
                     # 4) 写入 StepTrace（env.trace 的最后一步），用于 steps.jsonl 终止步带上 episode_return
                     if getattr(env, "trace", None) and len(env.trace) > 0:
                         env.trace[-1].episode_return = float(ep_ret)
@@ -709,8 +710,8 @@ def main():
                 writer.add_scalar("train/optimal object/f(T)", float(np.mean(term_f_list)), it)
             if len(term_level1_inv_after_list) > 0:
                 writer.add_scalar("train/optimal object/level1_inventory(T)", float(np.mean(term_level1_inv_after_list)), it)
-            if len(success_tplus1_list) > 0:
-                writer.add_scalar("train/optimal object/steps used in success ep", float(np.mean(success_tplus1_list)), it)
+            if len(success_tstar_list) > 0:
+                writer.add_scalar("train/optimal object/T* in success ep", float(np.mean(success_tstar_list)), it)
 
             if n_steps > 0:
                 for _k, _v in reward_sums.items():

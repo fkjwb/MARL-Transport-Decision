@@ -440,6 +440,7 @@ def compute_terminal_reward(
     reason: str,
     Y_exo_total: float,
     *,
+    T_star: Optional[int] = None,
     neg_inventory: bool = False,
     over_ui_rows: Optional[List[int]] = None,
     lvl23_material_totals: Optional[np.ndarray] = None,
@@ -449,10 +450,11 @@ def compute_terminal_reward(
     rp = RewardParts()
 
     if reason == "success":
-        rp.R_base = 10.0
+        rp.R_base = 8.0
 
-        remain_steps = max(int(spec.T) - int(t + 1), 0)
-        rp.R_T_left = 4.0 * float(remain_steps)
+        t_star = int(T_star) if T_star is not None else int(t)
+        remain_steps = max(int(spec.T) - t_star, 0)
+        rp.R_T_left = 2.5 * float(remain_steps)
         rp.R_f_penalty = -0.5 * float(f_switch)
 
         if len(lvl1_rows) > 0:
@@ -619,6 +621,7 @@ class LogisticsEnv:
         self._Wi: np.ndarray = np.zeros((self.N, self.K), dtype=np.int32)
         self._Yi: np.ndarray = np.zeros((self.N, self.K), dtype=np.int32)
         self._f_switch = 0
+        self._t_star: Optional[int] = None
 
         # 上一时刻 belt one-hot 动作 / overlap 标志 / 决策顺序
         self._last_belt_action = np.zeros((self.B, self.K + 1), dtype=np.float32)  # last raw belt action
@@ -675,6 +678,7 @@ class LogisticsEnv:
 
         self._t = 0
         self._f_switch = 0
+        self._t_star = None
         self.trace = []
 
         Wi0 = []
@@ -737,6 +741,10 @@ class LogisticsEnv:
                     if tt < len(node.y[k]) and float(node.y[k][tt]) != 0.0:
                         return False
         return True
+
+    def _future_yi_all_zero_after_transition(self, t: int, Y_after: np.ndarray) -> bool:
+        """检查在当前 t 完成状态转移后，未来所有时刻 Yi 是否都会为 0。"""
+        return int(np.asarray(Y_after).sum()) == 0 and self._future_exogenous_demand_all_zero(t)
 
     # ---------- windows ----------
     def _y_window_flat(self, nid: NodeId, t: int, n: int) -> List[float]:
@@ -1152,6 +1160,10 @@ class LogisticsEnv:
         rp_step = compute_reward(spec, Wi_before, W_after, Yi_before, Y_after, f_before, f_after, self._Y_exo_total)
         rp = rp_step
 
+        # 维护 T*：首次满足“执行完当前 t 时刻动作并完成状态转移后，未来所有时刻 Yi 均为 0”的 t 时刻
+        if self._t_star is None and self._future_yi_all_zero_after_transition(t, Y_after):
+            self._t_star = int(t)
+
         # termination（在本步完成状态转移 & 需求结转后判定）
         node_ids = self.node_ids  # 与 Wi/Yi 的行顺序一致（sorted(spec.nodes.keys()))
         node_totals = W_after.sum(axis=1).astype(np.float32)
@@ -1198,30 +1210,15 @@ class LogisticsEnv:
             )
             rp = rp_step + rp_term
 
-        # (1) 成功：
-        # - 当前时刻以前已注入且尚未满足的需求，在本步后全部清零；
-        # - 且 yaml 中未来时刻 (t+1..T-1) 的 Y_exo 也全部为 0。
-        elif int(Y_after.sum()) == 0 and self._future_exogenous_demand_all_zero(t):
-            done = True
-            reason = "success"
-            rp_term = compute_terminal_reward(
-                spec,
-                node_ids=node_ids,
-                lvl1_rows=self._lvl1_rows,
-                lvl23_rows=self._lvl23_rows,
-                W_after=W_after,
-                Y_after=Y_after,
-                t=t,
-                f_switch=f_after,
-                reason=reason,
-                Y_exo_total=self._Y_exo_total,
-            )
-            rp = rp_step + rp_term
-
-        # (2) t+1 == T 且仍有未满足需求
+        # (1)/(2) 仅在最终时刻判定 success / demand_not_fulfill：
+        # - success：t+1 == T，且状态转移后所有节点 Yi 均为 0；
+        # - demand_not_fulfill：t+1 == T，但仍存在未满足需求。
         elif self._t + 1 == self.spec.T:
             done = True
-            reason = "demand_not_fulfill"
+            if int(Y_after.sum()) == 0:
+                reason = "success"
+            else:
+                reason = "demand_not_fulfill"
             rp_term = compute_terminal_reward(
                 spec,
                 node_ids=node_ids,
@@ -1233,6 +1230,7 @@ class LogisticsEnv:
                 f_switch=f_after,
                 reason=reason,
                 Y_exo_total=self._Y_exo_total,
+                T_star=self._t_star,
             )
             rp = rp_step + rp_term
 
@@ -1285,6 +1283,7 @@ class LogisticsEnv:
                     "R_T_left": float(rp.R_T_left),
                     "R_f_penalty": float(rp.R_f_penalty),
                     "R_level1": float(rp.R_level1),
+                    "T_star": None if self._t_star is None else int(self._t_star),
                 }
             elif reason == "demand_not_fulfill":
                 re_trace = {
@@ -1354,6 +1353,7 @@ class LogisticsEnv:
             "reward_scale": float(self.reward_scale),
             "reward_raw": float(rp.total),
             "f": int(self._f_switch),
+            "T_star": None if self._t_star is None else int(self._t_star),
             "ignored_overlap": list(belt_res.ignored_due_to_overlap),
         }
         return obs, scaled_reward, bool(done), False, info

@@ -153,11 +153,11 @@ train:
   debug_first_full_episode_each_iter: false
   ckpt_every: 50
   # resume training (load checkpoint and continue)
-  resume_ckpt: ./runs/20260315-184628/ckpt/ckpt_001250.pt       #  ./runs/20260315-184628/ckpt/ckpt_001250.pt
+  resume_ckpt: null       #  ./runs/20260315-184628/ckpt/ckpt_001250.pt
   resume_load_optimizer: false
   resume_load_trainer_state: false
 
-  gamma: 0.99
+  gamma: 0.995
   gae_lambda: 0.97
   clip_ratio: 0.2
   lr_actor: 0.0001
@@ -168,8 +168,8 @@ train:
   # Entropy regularization:
   # - Fixed coefficient: keep ent_decay as null (coef = ent_coef).
   # - Exponential decay: set ent_decay > 0 (coef_t = ent_coef * exp(-ent_decay * iteration)), e.g. 0.001.
-  ent_coef: 0.003
-  ent_decay: 0.003
+  ent_coef: 0.02
+  ent_decay: 0.002
   max_grad_norm: 0.5
   optimizer:
     ppo_actor: {betas: [0.9, 0.999], eps: 1.0e-8, weight_decay: 0.0}
