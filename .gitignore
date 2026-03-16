@@ -1,0 +1,9 @@
+runs/
+
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.csv
+*.jsonl
+*.docx
+*.pptx

@@ -1,0 +1,147 @@
+env:
+  name: Vehicle_scheduling
+  T: 8
+  n_obs: 3
+  materials:
+    - {name: C1, material_id: 0}
+    - {name: C2, material_id: 1}
+
+  nodes:
+    - node_id: 1
+      node_name: V1
+      A_s_id: [1]
+      A_l_id: [5]
+      Jij_list:
+        C1:
+          - {"3": [1, 2, 1, 0, 1, 2, 1, 1]}
+          - {"4": [0, 1, 1, 2, 1, 0, 1, 1]}
+        C2:
+          - {"3": [2, 1, 0, 1, 1, 2, 1, 0]}
+          - {"4": [1, 1, 2, 1, 0, 1, 1, 1]}
+
+    - node_id: 2
+      node_name: V2
+      A_s_id: [2]
+      A_l_id: [6]
+      Jij_list:
+        C1:
+          - {"4": [1, 1, 2, 1, 2, 1, 0, 1]}
+          - {"5": [2, 1, 1, 2, 1, 1, 2, 1]}
+        C2:
+          - {"4": [0, 1, 1, 0, 1, 1, 1, 0]}
+          - {"5": [1, 2, 1, 2, 1, 0, 1, 1]}
+
+    - node_id: 3
+      node_name: V3
+      A_s_id: []
+      A_l_id: []
+      Jij_list:
+        C1:
+          - {"1": [0, 1, 0, 1, 0, 1, 0, 1]}
+          - {"6": [1, 0, 2, 0, 1, 0, 1, 0]}
+        C2:
+          - {"4": [1, 0, 1, 0, 1, 0, 1, 0]}
+          - {"6": [0, 1, 0, 1, 0, 1, 0, 1]}
+
+    - node_id: 4
+      node_name: V4
+      A_s_id: [3]
+      A_l_id: []
+      Jij_list:
+        C1:
+          - {"6": [1, 2, 1, 1, 2, 1, 1, 0]}
+          - {"3": [0, 1, 0, 1, 0, 1, 0, 1]}
+        C2:
+          - {"5": [1, 0, 1, 0, 1, 0, 1, 0]}
+          - {"7": [1, 1, 1, 1, 0, 0, 1, 1]}
+
+    - node_id: 5
+      node_name: V5
+      A_s_id: [4]
+      A_l_id: []
+      Jij_list:
+        C1:
+          - {"7": [1, 1, 2, 1, 1, 2, 1, 1]}
+        C2:
+          - {"4": [0, 1, 0, 1, 0, 1, 0, 1]}
+          - {"2": [1, 0, 1, 0, 1, 0, 1, 0]}
+
+    - node_id: 6
+      node_name: V6
+      A_s_id: []
+      A_l_id: [7]
+      Jij_list:
+        C1:
+          - {"4": [0, 1, 0, 1, 0, 1, 0, 1]}
+        C2:
+          - {"3": [1, 1, 0, 1, 1, 0, 1, 1]}
+
+    - node_id: 7
+      node_name: V7
+      A_s_id: []
+      A_l_id: [8]
+      Jij_list:
+        C1:
+          - {"5": [0, 0, 1, 0, 1, 0, 1, 0]}
+        C2:
+          - {"4": [0, 1, 0, 0, 1, 0, 0, 1]}
+
+  edges:
+    - {edge_name: E13, edge_id: 1, src: 1, dst: 3}
+    - {edge_name: E14, edge_id: 2, src: 1, dst: 4}
+    - {edge_name: E24, edge_id: 3, src: 2, dst: 4}
+    - {edge_name: E25, edge_id: 4, src: 2, dst: 5}
+    - {edge_name: E34, edge_id: 5, src: 3, dst: 4}
+    - {edge_name: E45, edge_id: 6, src: 4, dst: 5}
+    - {edge_name: E36, edge_id: 7, src: 3, dst: 6}
+    - {edge_name: E46, edge_id: 8, src: 4, dst: 6}
+    - {edge_name: E47, edge_id: 9, src: 4, dst: 7}
+    - {edge_name: E57, edge_id: 10, src: 5, dst: 7}
+
+  vehicles:
+    A_small:
+      capacity: 1
+      A_s_id: [1, 2, 3, 4]
+    A_large:
+      capacity: 2
+      A_l_id: [5, 6, 7, 8]
+
+model:
+  activation: tanh
+  actor:
+    d_hidden: 128
+    d_model: 128
+    heads: 4
+    layers: 2
+    dropout: 0.1
+  critic:
+    mlp_hidden: [256, 128, 64]
+  gat:
+    d_hidden_gat: 64
+    gat_heads: 4
+    gat_layers: 2
+    gat_dropout: 0.1
+    lr: 0.0003
+    l2: 0.0
+
+train:
+  seed: 42
+  device: cpu
+  runs_dir: ./runs
+  iterations: 2000
+  steps_per_iter: 1024
+  ckpt_every: 50
+  resume_ckpt: null
+  debug_first_full_episode_each_iter: false
+
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_ratio: 0.2
+  lr_actor: 0.0003
+  lr_critic: 0.0003
+  train_epochs: 4
+  minibatch_size: 128
+  vf_coef: 0.5
+  ent_coef: 0.02
+  ent_decay: 0.001
+  max_grad_norm: 0.5

@@ -1,0 +1,16 @@
+name: dl__py_3.9
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - torchaudio=2.5.1
+  - pytorch-cuda=12.4
+  - jupyter
+  - tensorboard
+  - gurobipy  # 可选，用于算法/模型对比
+prefix: D:\Anaconda\envs\dl__py_3.9

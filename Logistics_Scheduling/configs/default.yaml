@@ -1,0 +1,199 @@
+env:
+  name: logistics_env
+  T: 8
+  n_obs: 4  # 未来可观测区间长度（包含当前时刻）
+
+  materials:
+    - {name: C1, Lk: 0, Uk: 5000}
+    - {name: C2, Lk: 0, Uk: 5000}
+
+  nodes:
+    - node_id: 1
+      name: V1_库1
+      level: 1
+      Li: 0
+      Ui: 300
+      Li_s: 0
+      Ui_s: 250
+      W0: [100, 100]
+      Pi:
+        - [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        - [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+    - node_id: 2
+      name: V2_库2
+      level: 1
+      Li: 0
+      Ui: 1000
+      Li_s: 0
+      Ui_s: 950
+      W0: [300, 300]
+      Pi:
+        - [  0,  0,  0,  0,0.5, 0.5, 0.5, 1]
+        - [  0,  1,  0,0.5,  0,   1, 0.5, 1]
+
+    - node_id: 3
+      name: V3_原料库1
+      level: 2
+      Li: 0
+      Ui: 500
+      Li_s: 20
+      Ui_s: 450
+      W0: [30, 10]
+      Y_exo:
+        - [28, 0,  0, 0, 18, 0, 0, 0]
+        - [ 0, 0, 28, 0,  0, 0, 0, 0]
+
+    - node_id: 4
+      name: V4_受料槽1
+      level: 2
+      Li: 0
+      Ui: 300
+      Li_s: 20
+      Ui_s: 250
+      W0: [100, 100]
+      Mj_truck_unload: 30
+      Pi:
+        - [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        - [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+    - node_id: 5
+      name: V5_受料槽2
+      level: 2
+      Li: 0
+      Ui: 300
+      Li_s: 20
+      Ui_s: 250
+      W0: [110, 120]
+      Mj_truck_unload: 30
+      Pi:
+        - [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        - [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+    - node_id: 6
+      name: V6_原料库2
+      level: 2
+      Li: 0
+      Ui: 800
+      Li_s: 20
+      Ui_s: 750
+      W0: [20, 20]
+      Mj_truck_unload: 40
+      Y_exo:
+        # - [70, 15, 10, 5,35, 0, 0, 0]       # 下面的可以了换成上面的
+        # - [85, 10,  0, 5,10, 0, 0, 0]
+        - [70, 35, 15,15, 5, 0, 0, 0]
+        - [85, 10,  0, 5,10, 0, 0, 0]
+
+    - node_id: 7
+      name: V7_产线口A
+      level: 3
+      Li: 0
+      Ui: 200
+      Li_s: 40
+      Ui_s: 180
+      W0: [20, 20]
+      Y_exo:
+        - [ 8, 0, 0, 0, 0, 0, 0, 0]
+        - [ 0, 0,18,20,19, 0, 0, 0]
+
+    - node_id: 8
+      name: V8_产线口B
+      level: 3
+      Li: 0
+      Ui: 200
+      Li_s: 40
+      Ui_s: 180
+      W0: [20, 20]
+      Y_exo:
+        - [ 0, 0,17,18,20, 0, 0, 0]
+        - [10, 0, 0, 0, 0, 0, 0, 0]
+
+  edges:
+    - {edge_id: E13, src: 1, dst: 3, mode: belt, belt_combos: [c13_1, c13_2]}
+    - {edge_id: E24, src: 2, dst: 4, mode: truck}
+    - {edge_id: E25, src: 2, dst: 5, mode: truck}
+    - {edge_id: E26, src: 2, dst: 6, mode: both, belt_combos: [c26_1]}
+    - {edge_id: E43, src: 4, dst: 3, mode: belt, belt_combos: [c43_1]}
+    - {edge_id: E47, src: 4, dst: 7, mode: belt, belt_combos: [c47_1]}
+    - {edge_id: E48, src: 4, dst: 8, mode: belt, belt_combos: [c48_1]}
+    - {edge_id: E57, src: 5, dst: 7, mode: belt, belt_combos: [c57_1]}
+    - {edge_id: E58, src: 5, dst: 8, mode: belt, belt_combos: [c58_1]}
+
+  belt_combos:
+    - {combo_id: c13_1, edge_id: E13, sub_belts: [1, 2], capacity: 20}
+    - {combo_id: c13_2, edge_id: E13, sub_belts: [1, 3], capacity: 30}
+    - {combo_id: c26_1, edge_id: E26, sub_belts: [4, 5], capacity: 40}
+    - {combo_id: c43_1, edge_id: E43, sub_belts: [3]   , capacity: 20}
+    - {combo_id: c47_1, edge_id: E47, sub_belts: [6, 7], capacity: 10}
+    - {combo_id: c48_1, edge_id: E48, sub_belts: [6, 8], capacity: 20}
+    - {combo_id: c57_1, edge_id: E57, sub_belts: [9, 7], capacity: 20}
+    - {combo_id: c58_1, edge_id: E58, sub_belts: [9, 8], capacity: 10}
+
+  belt_order_mode: manual  # model / manual
+  belt_decision_seq: [c13_1, c13_2, c48_1, c43_1, c57_1, c26_1, c47_1, c58_1]
+
+model:
+  activation: tanh
+  # truck actor (汽运)
+  trunk_actor_mlp_hidden: [128,64]
+  # critic
+  critic_mlp_hidden: [256,128,64]
+  # belt actor (皮带)
+  belt_transformer: {d_model: 64, nhead: 2, num_layers: 1, dropout: 0.1}
+  # order module
+  order_module: {gat_hidden: 32, gat_heads: 2, gat_layers: 1, gat_dropout: 0.1, decoder_hidden: 64, activation: tanh, depth_k: 3}
+
+train:
+  seed: 42
+  device: cpu
+  runs_dir: ./runs
+  iterations: 2500
+  steps_per_iter: 1024
+  debug_first_full_episode_each_iter: false
+  ckpt_every: 50
+  # resume training (load checkpoint and continue)
+  resume_ckpt: ./runs/20260315-184628/ckpt/ckpt_001250.pt       #  ./runs/20260315-184628/ckpt/ckpt_001250.pt
+  resume_load_optimizer: false
+  resume_load_trainer_state: false
+
+  gamma: 0.99
+  gae_lambda: 0.97
+  clip_ratio: 0.2
+  lr_actor: 0.0001
+  lr_critic: 0.0001
+  train_epochs: 4
+  minibatch_size: 256
+  vf_coef: 0.5
+  # Entropy regularization:
+  # - Fixed coefficient: keep ent_decay as null (coef = ent_coef).
+  # - Exponential decay: set ent_decay > 0 (coef_t = ent_coef * exp(-ent_decay * iteration)), e.g. 0.001.
+  ent_coef: 0.003
+  ent_decay: 0.003
+  max_grad_norm: 0.5
+  optimizer:
+    ppo_actor: {betas: [0.9, 0.999], eps: 1.0e-8, weight_decay: 0.0}
+    ppo_critic: {betas: [0.9, 0.999], eps: 1.0e-8, weight_decay: 0.0}
+    order: {betas: [0.9, 0.999], eps: 1.0e-8, weight_decay: 0.0}
+
+  order:
+    # manual
+    lr: 0.0        # 冻结 order 网络参数更新
+    mu_init: 0.0   # 冻结拉格朗日/罚项相关状态（从 0 开始）
+    rho: 1.0       # 不增长
+    mu_max: 0.0    # 上限为 0，等价于不启用
+
+    # model
+    # lr: 0.0001
+    # mu_init: 0.001
+    # rho: 1.05
+    # mu_max: 1.0e4
+
+    train_epochs: 1
+    minibatch_size: 256
+    tol: 1.0e-04
+    depth_k: 3
+    normalize_constraints: true
+    h_coef: 1.0
+    c_coef: 1.0
+    max_grad_norm: 1.0
