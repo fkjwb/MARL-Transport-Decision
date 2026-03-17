@@ -394,7 +394,7 @@ def compute_reward(
     del Wi_before, f_before, f_after
 
     R_demand = 0.01 * float(Yi_before.sum() - Yi_after.sum())
-    R_backlog = -2.0 * (float(Yi_after.sum()) / float(Y_exo_total))
+    R_backlog = max(-1.0 * (float(Yi_after.sum()) / float(Y_exo_total)),-0.5)
 
     node_ids = list(sorted(spec.nodes.keys()))
     lvl23_rows = [i for i, nid in enumerate(node_ids) if int(spec.nodes[nid].level) in (2, 3)]
@@ -586,10 +586,22 @@ class LogisticsEnv:
         # same dst/src 计数（每个节点上有多少 truck edge 指向/来自该节点）
         self._truck_dst_count: Dict[NodeId, int] = {}
         self._truck_src_count: Dict[NodeId, int] = {}
+        self._truck_out_edges_by_src: Dict[NodeId, List[EdgeId]] = {}
+        self._truck_in_edges_by_dst: Dict[NodeId, List[EdgeId]] = {}
         for eid in self.truck_edges:
             e = spec.edges[eid]
             self._truck_dst_count[e.dst] = self._truck_dst_count.get(e.dst, 0) + 1
             self._truck_src_count[e.src] = self._truck_src_count.get(e.src, 0) + 1
+            self._truck_out_edges_by_src.setdefault(e.src, []).append(eid)
+            self._truck_in_edges_by_dst.setdefault(e.dst, []).append(eid)
+
+        self._belt_out_combos_by_src: Dict[NodeId, List[ComboId]] = {}
+        self._belt_in_combos_by_dst: Dict[NodeId, List[ComboId]] = {}
+        for cid in self.belt_combos:
+            combo = spec.belt_combos[cid]
+            edge = spec.edges[combo.edge_id]
+            self._belt_out_combos_by_src.setdefault(edge.src, []).append(cid)
+            self._belt_in_combos_by_dst.setdefault(edge.dst, []).append(cid)
 
         # ---------- 观测维度 ----------
         self.n_obs = int(getattr(spec, "n_obs", 1))
@@ -648,7 +660,7 @@ class LogisticsEnv:
         }
 
     def _node_row(self, nid: NodeId) -> int:
-        return self.node_ids.index(nid)
+        return self._node_id_to_row[nid]
 
     def _demand_nodes(self) -> List[NodeId]:
         out = []
@@ -1028,6 +1040,111 @@ class LogisticsEnv:
         order_idx = np.argsort(-x).tolist()
         return [self.belt_combos[i] for i in order_idx]
 
+    def _project_executed_flows(
+        self,
+        truck_amounts: Dict[EdgeId, np.ndarray],
+        belt_amounts: Dict[ComboId, np.ndarray],
+        Wi_before: np.ndarray,
+    ) -> Tuple[Dict[EdgeId, np.ndarray], Dict[ComboId, np.ndarray]]:
+        spec = self.spec
+        truck_proj: Dict[EdgeId, np.ndarray] = {
+            eid: np.asarray(amt, dtype=np.int32).copy()
+            for eid, amt in truck_amounts.items()
+        }
+        belt_proj: Dict[ComboId, np.ndarray] = {
+            cid: np.asarray(amt, dtype=np.int32).copy()
+            for cid, amt in belt_amounts.items()
+        }
+
+        def compute_node_flows() -> Tuple[np.ndarray, np.ndarray]:
+            out_flow = np.zeros((self.N, self.K), dtype=np.int32)
+            in_flow = np.zeros((self.N, self.K), dtype=np.int32)
+
+            for eid, amt in truck_proj.items():
+                edge = spec.edges[eid]
+                src_row = self._node_id_to_row[edge.src]
+                dst_row = self._node_id_to_row[edge.dst]
+                out_flow[src_row, :] = out_flow[src_row, :] + amt
+                in_flow[dst_row, :] = in_flow[dst_row, :] + amt
+
+            for cid, amt in belt_proj.items():
+                combo = spec.belt_combos[cid]
+                edge = spec.edges[combo.edge_id]
+                src_row = self._node_id_to_row[edge.src]
+                dst_row = self._node_id_to_row[edge.dst]
+                out_flow[src_row, :] = out_flow[src_row, :] + amt
+                in_flow[dst_row, :] = in_flow[dst_row, :] + amt
+
+            return out_flow, in_flow
+
+        max_iter = max(8, 2 * self.N * max(self.K, 1))
+        for _ in range(max_iter):
+            changed = False
+            out_flow, in_flow = compute_node_flows()
+
+            # Joint source-side inventory projection:
+            # for each node/material, total outgoing flow cannot exceed
+            # step-start inventory plus same-step accepted inflow.
+            for nid in self.node_ids:
+                row = self._node_id_to_row[nid]
+                for k in range(self.K):
+                    out_total = int(out_flow[row, k])
+                    if out_total <= 0:
+                        continue
+
+                    available = float(Wi_before[row, k]) + float(in_flow[row, k])
+                    if float(out_total) <= available + 1e-9:
+                        continue
+
+                    scale = 0.0 if available <= 0.0 else (available / float(out_total))
+                    for eid in self._truck_out_edges_by_src.get(nid, []):
+                        old_val = int(truck_proj[eid][k])
+                        new_val = int(_floor_int(float(old_val) * scale))
+                        if new_val != old_val:
+                            truck_proj[eid][k] = new_val
+                            changed = True
+                    for cid in self._belt_out_combos_by_src.get(nid, []):
+                        old_val = int(belt_proj[cid][k])
+                        new_val = int(_floor_int(float(old_val) * scale))
+                        if new_val != old_val:
+                            belt_proj[cid][k] = new_val
+                            changed = True
+
+            out_flow, in_flow = compute_node_flows()
+
+            # Destination-side total-capacity projection:
+            # accepted inflow must keep the node's end-of-step total inventory within Ui.
+            for nid in self.node_ids:
+                row = self._node_id_to_row[nid]
+                in_total = int(in_flow[row, :].sum())
+                if in_total <= 0:
+                    continue
+
+                out_total = int(out_flow[row, :].sum())
+                total_before = float(Wi_before[row, :].sum())
+                allowed_in = max(float(spec.nodes[nid].Ui) - total_before + float(out_total), 0.0)
+                if float(in_total) <= allowed_in + 1e-9:
+                    continue
+
+                scale = 0.0 if allowed_in <= 0.0 else (allowed_in / float(in_total))
+                for eid in self._truck_in_edges_by_dst.get(nid, []):
+                    old_amt = truck_proj[eid].copy()
+                    new_amt = _floor_int(old_amt.astype(np.float32) * scale).astype(np.int32)
+                    if not np.array_equal(new_amt, old_amt):
+                        truck_proj[eid] = new_amt
+                        changed = True
+                for cid in self._belt_in_combos_by_dst.get(nid, []):
+                    old_amt = belt_proj[cid].copy()
+                    new_amt = _floor_int(old_amt.astype(np.float32) * scale).astype(np.int32)
+                    if not np.array_equal(new_amt, old_amt):
+                        belt_proj[cid] = new_amt
+                        changed = True
+
+            if not changed:
+                break
+
+        return truck_proj, belt_proj
+
     def step(self, action: Dict[str, np.ndarray]):
         spec = self.spec
         t = int(self._t)
@@ -1042,7 +1159,17 @@ class LogisticsEnv:
         # belt 动作先用于执行裁剪（Pi / overlap）
         X = process_truck_actions(spec, self.truck_edges, t, a_truck)
         belt_res = process_belt_actions(spec, self.belt_combos, self._combo_overlap, t, a_belt, belt_order)
+        Wi_before = self._Wi.copy()
+        X.edge_amounts, belt_res.combo_amounts = self._project_executed_flows(
+            X.edge_amounts,
+            belt_res.combo_amounts,
+            Wi_before,
+        )
         B_amt = belt_res.combo_amounts
+        belt_res.selected_material = {
+            cid: (mat if int(B_amt[cid].sum()) > 0 else None)
+            for cid, mat in belt_res.selected_material.items()
+        }
 
         # 保存“原始输入”的 belt 动作 Bij(t)（供下一时刻观测）
         # 注意：这里记录的是 env 收到的 action["belt"]，不再是约束/overlap 处理后的最终执行动作
@@ -1093,7 +1220,6 @@ class LogisticsEnv:
         self._f_switch = int(f_after)
 
         # 更新 Wi/Yi（保持原逻辑：truck + belt amounts 进入系统）
-        Wi_before = self._Wi.copy()
 
         # 需求转接逻辑：
         # - self._Yi 存的是“上一时刻结束后”的未满足需求 Yi(t-1)
