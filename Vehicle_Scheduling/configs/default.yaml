@@ -132,6 +132,8 @@ train:
   steps_per_iter: 1024
   ckpt_every: 50
   resume_ckpt: null
+  resume_use_checkpoint_config: true    # true | 恢复训练时优先用 checkpoint 所属 run 目录里的 config.yaml，避免模型维度不匹配
+  resume_continue_in_place: true    # true | 恢复训练时直接继续写回该 checkpoint 所属的同一个 runs/<timestamp> 目录，tb 和 ckpt 都延续
   debug_first_full_episode_each_iter: false
 
   gamma: 0.99

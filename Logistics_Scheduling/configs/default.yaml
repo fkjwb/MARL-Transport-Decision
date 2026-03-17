@@ -1,7 +1,7 @@
 env:
   name: logistics_env
   T: 8
-  n_obs: 4  # 未来可观测区间长度（包含当前时刻）
+  n_obs: 3  # 未来可观测区间长度（包含当前时刻）
 
   materials:
     - {name: C1, Lk: 0, Uk: 5000}
@@ -130,7 +130,7 @@ env:
     - {combo_id: c57_1, edge_id: E57, sub_belts: [9, 7], capacity: 20}
     - {combo_id: c58_1, edge_id: E58, sub_belts: [9, 8], capacity: 10}
 
-  belt_order_mode: manual  # model / manual
+  belt_order_mode: model  # model / manual
   belt_decision_seq: [c13_1, c13_2, c48_1, c43_1, c57_1, c26_1, c47_1, c58_1]
 
 model:
@@ -153,7 +153,9 @@ train:
   debug_first_full_episode_each_iter: false
   ckpt_every: 50
   # resume training (load checkpoint and continue)
-  resume_ckpt: null       #  ./runs/20260315-184628/ckpt/ckpt_001250.pt
+  resume_ckpt: null      #  ./runs/20260316-115450/ckpt/ckpt_000250.pt
+  resume_use_checkpoint_config: true    # true | 恢复训练时优先用 checkpoint 所属 run 目录里的 config.yaml，避免模型维度不匹配
+  resume_continue_in_place: true    # true | 恢复训练时直接继续写回该 checkpoint 所属的同一个 runs/<timestamp> 目录，tb 和 ckpt 都延续
   resume_load_optimizer: false
   resume_load_trainer_state: false
 
@@ -178,16 +180,16 @@ train:
 
   order:
     # manual
-    lr: 0.0        # 冻结 order 网络参数更新
-    mu_init: 0.0   # 冻结拉格朗日/罚项相关状态（从 0 开始）
-    rho: 1.0       # 不增长
-    mu_max: 0.0    # 上限为 0，等价于不启用
+    # lr: 0.0        # 冻结 order 网络参数更新
+    # mu_init: 0.0   # 冻结拉格朗日/罚项相关状态（从 0 开始）
+    # rho: 1.0       # 不增长
+    # mu_max: 0.0    # 上限为 0，等价于不启用
 
     # model
-    # lr: 0.0001
-    # mu_init: 0.001
-    # rho: 1.05
-    # mu_max: 1.0e4
+    lr: 0.0001
+    mu_init: 0.001
+    rho: 1.05
+    mu_max: 1.0e4
 
     train_epochs: 1
     minibatch_size: 256

@@ -1,24 +1,29 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import os
 import random
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
+import yaml
 from torch.utils.tensorboard import SummaryWriter
 
 from algos.jointppo import JointPPOTrainer, JointPolicy, PPOBuffer
 from envs import VehicleSchedulingEnv, build_env_spec, dump_step_jsonl, load_yaml
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="./configs/default_3node.yaml")
+    parser.add_argument("--config", "--configs", dest="config", type=str, default="configs/default_3node.yaml")
     parser.add_argument("--device", type=str, default=None)
     return parser.parse_args()
 
@@ -35,8 +40,177 @@ def timestamp_str() -> str:
     return time.strftime("%Y%m%d-%H%M%S", time.localtime())
 
 
-def make_run_dirs(runs_dir: str) -> Dict[str, Path]:
-    root = Path(runs_dir) / timestamp_str()
+def _path_candidates(raw_path: str | Path, *, runs_dir: Optional[Path] = None) -> List[Path]:
+    path = Path(str(raw_path)).expanduser()
+    if path.is_absolute():
+        return [path]
+
+    candidates: List[Path] = []
+    for candidate in (Path.cwd() / path, PROJECT_ROOT / path):
+        candidate = candidate.resolve()
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    normalized_parts = [part for part in path.parts if part not in ("", ".")]
+    if runs_dir is not None and (not normalized_parts or normalized_parts[0].lower() != runs_dir.name.lower()):
+        runs_candidate = (runs_dir / path).resolve()
+        if runs_candidate not in candidates:
+            candidates.append(runs_candidate)
+
+    return candidates
+
+
+def _resolve_existing_path(raw_path: str | Path, *, label: str) -> Path:
+    candidates = _path_candidates(raw_path)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    tried = ", ".join(str(p) for p in candidates)
+    raise FileNotFoundError(f"{label} not found: {raw_path}. Tried: {tried}")
+
+
+def _resolve_runs_dir(raw_path: str | Path) -> Path:
+    path = Path(str(raw_path)).expanduser()
+    if path.is_absolute():
+        return path
+    return (PROJECT_ROOT / path).resolve()
+
+
+def _latest_checkpoint(ckpt_dir: Path) -> Optional[Path]:
+    if not ckpt_dir.is_dir():
+        return None
+    ckpts = sorted(ckpt_dir.glob("ckpt_*.pt"))
+    if not ckpts:
+        return None
+    return ckpts[-1]
+
+
+def _run_config_path(run_dir: Path) -> Optional[Path]:
+    cfg_path = run_dir / "config.yaml"
+    return cfg_path if cfg_path.is_file() else None
+
+
+def _resolve_resume_checkpoint(
+    raw_path: str | None,
+    *,
+    runs_dir: Path,
+    emit_logs: bool = True,
+) -> Optional[Path]:
+    if raw_path is None:
+        return None
+
+    raw_text = str(raw_path).strip()
+    if not raw_text:
+        return None
+
+    candidates = _path_candidates(raw_text, runs_dir=runs_dir)
+    details: List[str] = []
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+        if candidate.is_dir():
+            latest = _latest_checkpoint(candidate)
+            if latest is not None:
+                return latest
+            latest = _latest_checkpoint(candidate / "ckpt")
+            if latest is not None:
+                return latest
+            details.append(f"{candidate} exists but contains no 'ckpt_*.pt' checkpoint")
+        else:
+            details.append(f"{candidate} does not exist")
+
+    tried = ", ".join(str(p) for p in candidates)
+    reason = "; ".join(details) if details else "no candidate matched"
+    message = (
+        f"resume checkpoint not found from '{raw_text}'. "
+        f"Expected a checkpoint file, a timestamp run directory, or a ckpt directory. "
+        f"Tried: {tried}. Details: {reason}"
+    )
+    if emit_logs:
+        print(f"[resume] {message}")
+    raise FileNotFoundError(
+        message
+    )
+
+
+def _resume_config_path(resume_ckpt: Path) -> Optional[Path]:
+    return _run_config_path(_resume_run_dir(resume_ckpt))
+
+
+def _resume_run_dir(resume_ckpt: Path) -> Path:
+    return resume_ckpt.parent.parent if resume_ckpt.parent.name.lower() == "ckpt" else resume_ckpt.parent
+
+
+def _merge_resume_config(saved_cfg: Dict[str, Any], requested_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    merged = deepcopy(saved_cfg)
+    merged_train = deepcopy(saved_cfg.get("train", {}) or {})
+    merged_train.update(deepcopy(requested_cfg.get("train", {}) or {}))
+    merged["train"] = merged_train
+
+    for key, value in requested_cfg.items():
+        if key == "train":
+            continue
+        if key not in merged:
+            merged[key] = deepcopy(value)
+
+    return merged
+
+
+def _config_path_repr(path: Path) -> str:
+    try:
+        rel = path.resolve().relative_to(PROJECT_ROOT)
+        return f"./{rel.as_posix()}"
+    except ValueError:
+        return str(path)
+
+
+def _resolve_training_config(config_path: Path) -> tuple[Dict[str, Any], Path, Optional[Path], Path, Optional[Path]]:
+    requested_cfg = load_yaml(str(config_path))
+    requested_tcfg = requested_cfg.get("train", {}) or {}
+
+    runs_dir = _resolve_runs_dir(str(requested_tcfg.get("runs_dir", "./runs")))
+    resume_ckpt = _resolve_resume_checkpoint(requested_tcfg.get("resume_ckpt", None), runs_dir=runs_dir)
+
+    effective_cfg = requested_cfg
+    effective_config_path = config_path
+    resume_config_path = None
+
+    if resume_ckpt is not None and bool(requested_tcfg.get("resume_use_checkpoint_config", True)):
+        resume_config_path = _resume_config_path(resume_ckpt)
+        if resume_config_path is not None:
+            saved_cfg = load_yaml(str(resume_config_path))
+            effective_cfg = _merge_resume_config(saved_cfg, requested_cfg)
+            effective_config_path = resume_config_path
+
+            effective_tcfg = effective_cfg.get("train", {}) or {}
+            runs_dir = _resolve_runs_dir(str(effective_tcfg.get("runs_dir", "./runs")))
+            resume_ckpt = _resolve_resume_checkpoint(
+                effective_tcfg.get("resume_ckpt", None),
+                runs_dir=runs_dir,
+                emit_logs=False,
+            )
+
+    if resume_ckpt is not None:
+        effective_cfg.setdefault("train", {})["resume_ckpt"] = _config_path_repr(resume_ckpt)
+
+    return effective_cfg, effective_config_path, resume_config_path, runs_dir, resume_ckpt
+
+
+def _write_config_snapshot(cfg: Dict[str, Any], path: Path) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+
+
+def _torch_load_checkpoint(path: str | Path, map_location: Any) -> Dict[str, Any]:
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
+def make_run_dirs(runs_dir: Path, run_dir: Optional[Path] = None) -> Dict[str, Path]:
+    root = run_dir if run_dir is not None else (runs_dir / timestamp_str())
     ckpt_dir = root / "ckpt"
     tb_dir = root / "tb"
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -183,9 +357,10 @@ def summarize_first_episode(it: int, trace: List[Dict[str, Any]]) -> List[Dict[s
     return out
 
 
-def save_checkpoint(path: Path, policy: JointPolicy, trainer: JointPPOTrainer, iteration: int) -> None:
+def save_checkpoint(path: Path, policy: JointPolicy, trainer: JointPPOTrainer, iteration: int, cfg: Dict[str, Any]) -> None:
     ckpt = {
         "iteration": int(iteration),
+        "config": deepcopy(cfg),
         "policy": policy.state_dict(),
         "optimizer_actor": trainer.optimizer_actor.state_dict(),
         "optimizer_critic": trainer.optimizer_critic.state_dict(),
@@ -196,8 +371,16 @@ def save_checkpoint(path: Path, policy: JointPolicy, trainer: JointPPOTrainer, i
 def maybe_load_resume(path: str | None, policy: JointPolicy, trainer: JointPPOTrainer, device: torch.device) -> int:
     if not path:
         return 0
-    ckpt = torch.load(path, map_location=device)
-    policy.load_state_dict(ckpt["policy"])
+    ckpt = _torch_load_checkpoint(path, map_location=device)
+    try:
+        policy.load_state_dict(ckpt["policy"])
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Failed to load checkpoint '{path}' into the current Vehicle model. "
+            f"This usually means the checkpoint was trained with a different env/model config. "
+            f"Keep train.resume_use_checkpoint_config=true to reuse the checkpoint's config snapshot.\n"
+            f"Original error:\n{exc}"
+        ) from exc
     trainer.optimizer_actor.load_state_dict(ckpt["optimizer_actor"])
     trainer.optimizer_critic.load_state_dict(ckpt["optimizer_critic"])
     return int(ckpt.get("iteration", 0))
@@ -216,7 +399,10 @@ def main() -> None:
     print(f"train_start_time: {train_start_str}")
 
     args = parse_args()
-    cfg = load_yaml(args.config)
+    requested_config_path = _resolve_existing_path(args.config, label="config")
+    cfg, effective_config_path, resume_config_path, runs_dir, resume_ckpt = _resolve_training_config(
+        requested_config_path
+    )
     tcfg = cfg["train"]
 
     seed = int(tcfg.get("seed", 0))
@@ -235,16 +421,31 @@ def main() -> None:
 
     trainer = JointPPOTrainer(policy, cfg, device)
 
-    start_iter = maybe_load_resume(tcfg.get("resume_ckpt", None), policy, trainer, device)
+    start_iter = maybe_load_resume(str(resume_ckpt) if resume_ckpt is not None else None, policy, trainer, device)
+    resume_in_place = resume_ckpt is not None and bool(tcfg.get("resume_continue_in_place", True))
 
-    run_dirs = make_run_dirs(str(tcfg.get("runs_dir", "./runs")))
-    shutil.copyfile(args.config, run_dirs["config"])
-    writer = SummaryWriter(log_dir=str(run_dirs["tb"]))
+    run_dirs = make_run_dirs(runs_dir, _resume_run_dir(resume_ckpt) if resume_in_place else None)
+    print(f"[path] project_root={PROJECT_ROOT}")
+    print(f"[path] requested_config={requested_config_path}")
+    print(f"[path] effective_config={effective_config_path}")
+    if resume_config_path is not None:
+        print(f"[path] resume_config={resume_config_path}")
+    print(f"[path] runs_dir={runs_dir}")
+    print(f"[path] run_dir={run_dirs['root']}")
+    if resume_ckpt is not None:
+        print(f"[path] resume_ckpt={resume_ckpt}")
+    _write_config_snapshot(cfg, run_dirs["config"])
+    writer_kwargs = {"log_dir": str(run_dirs["tb"])}
+    if resume_in_place:
+        writer_kwargs["purge_step"] = start_iter + 1
+    writer = SummaryWriter(**writer_kwargs)
 
     iterations = int(tcfg["iterations"])
     steps_per_iter = int(tcfg["steps_per_iter"])
     ckpt_every = int(tcfg.get("ckpt_every", 50))
     debug_print = bool(tcfg.get("debug_first_full_episode_each_iter", False))
+    if start_iter >= iterations:
+        print(f"[resume] start iteration {start_iter} already reaches target iterations {iterations}; no new update will run.")
 
     for it in range(start_iter + 1, iterations + 1):
         buffer = PPOBuffer(gamma=float(tcfg["gamma"]), gae_lambda=float(tcfg["gae_lambda"]))
@@ -314,7 +515,7 @@ def main() -> None:
                     print(rec)
 
         if it % ckpt_every == 0 or it == iterations:
-            save_checkpoint(run_dirs["ckpt"] / f"ckpt_{it:06d}.pt", policy, trainer, it)
+            save_checkpoint(run_dirs["ckpt"] / f"ckpt_{it:06d}.pt", policy, trainer, it, cfg)
 
         ep_ret_mean = float(np.mean(ep_returns)) if ep_returns else 0.0
         ep_len_mean = float(np.mean(ep_lens)) if ep_lens else 0.0
