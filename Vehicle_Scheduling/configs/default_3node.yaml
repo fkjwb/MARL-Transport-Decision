@@ -62,14 +62,14 @@ model:
     d_hidden: 128
     d_model: 128
     heads: 2
-    layers: 2
+    layers: 1
     dropout: 0.1
   critic:
-    mlp_hidden: [256, 128, 64]
+    mlp_hidden: [512, 128, 32]
   gat:
     d_hidden_gat: 64
     gat_heads: 2
-    gat_layers: 2
+    gat_layers: 1
     gat_dropout: 0.1
 
 train:
@@ -84,14 +84,14 @@ train:
   resume_continue_in_place: true    # true | 恢复训练时直接继续写回该 checkpoint 所属的同一个 runs/<timestamp> 目录，tb 和 ckpt 都延续
   debug_first_full_episode_each_iter: false
 
-  gamma: 0.99
+  gamma: 0.995
   gae_lambda: 0.95
   clip_ratio: 0.2
-  lr_actor: 0.0003
+  lr_actor: 0.0002
   lr_critic: 0.0001
   train_epochs: 4
   minibatch_size: 256
   vf_coef: 0.5
   ent_coef: 0.02
-  ent_decay: 0.001
+  ent_decay: 0.002
   max_grad_norm: 0.5

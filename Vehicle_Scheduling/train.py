@@ -452,8 +452,11 @@ def main() -> None:
         ep_returns: List[float] = []
         ep_lens: List[int] = []
         reward_task_list: List[float] = []
+        reward_empty_run_list: List[float] = []
         reward_unused_list: List[float] = []
+        empty_run_count_list: List[float] = []
         reward_total_list: List[float] = []
+        completed_schedule_count_list: List[float] = []
         reward_terminal_list: List[float] = []
 
         first_episode_trace: List[Dict[str, Any]] = []
@@ -480,9 +483,13 @@ def main() -> None:
             cur_ep_len += 1
 
             reward_task_list.append(float(info["R_task"]))
+            reward_empty_run_list.append(float(info.get("R_emptyRun", 0.0)))
             reward_unused_list.append(float(info["R_unused_penalty"]))
+            empty_run_count_list.append(float(info.get("N_emptyRun", 0.0)))
             reward_total_list.append(float(info["R_step"]))
             if done and ("Re" in info) and (info["Re"] is not None):
+                if info.get("terminate_reason") == "completed" and ("n_schedule" in info):
+                    completed_schedule_count_list.append(float(info["n_schedule"]))
                 reward_terminal_list.append(float(sum(info["Re"].values())))
 
             obs = next_obs
@@ -520,26 +527,38 @@ def main() -> None:
         ep_ret_mean = float(np.mean(ep_returns)) if ep_returns else 0.0
         ep_len_mean = float(np.mean(ep_lens)) if ep_lens else 0.0
         r_task_mean = float(np.mean(reward_task_list)) if reward_task_list else 0.0
+        r_empty_run_mean = float(np.mean(reward_empty_run_list)) if reward_empty_run_list else 0.0
         r_unused_mean = float(np.mean(reward_unused_list)) if reward_unused_list else 0.0
+        n_empty_run_mean = float(np.mean(empty_run_count_list)) if empty_run_count_list else 0.0
         r_step_mean = float(np.mean(reward_total_list)) if reward_total_list else 0.0
+        completed_schedule_mean = (
+            float(np.mean(completed_schedule_count_list)) if completed_schedule_count_list else None
+        )
         r_terminal_mean = float(np.mean(reward_terminal_list)) if reward_terminal_list else 0.0
 
-        writer.add_scalar("loss/pi_loss", stats.pi_loss, it)
-        writer.add_scalar("loss/v_loss", stats.v_loss, it)
-        writer.add_scalar("loss/entropy_loss", stats.entropy_loss, it)
-        writer.add_scalar("loss/total_loss", stats.total_loss, it)
+        writer.add_scalar("train/pi_loss", stats.pi_loss, it)
+        writer.add_scalar("train/v_loss", stats.v_loss, it)
+        writer.add_scalar("train/entropy_loss", stats.entropy_loss, it)
+        writer.add_scalar("train/total_loss", stats.total_loss, it)
         writer.add_scalar("reward/R_task", r_task_mean, it)
+        writer.add_scalar("reward/R_emptyRun", r_empty_run_mean, it)
         writer.add_scalar("reward/R_unused_penalty", r_unused_mean, it)
         writer.add_scalar("reward/R_step", r_step_mean, it)
+        writer.add_scalar("index/N_emptyRun", n_empty_run_mean, it)
+        if completed_schedule_mean is not None:
+            writer.add_scalar("index/n_schedule_completed", completed_schedule_mean, it)
         writer.add_scalar("reward/Re", r_terminal_mean, it)
         writer.add_scalar("episode/return_mean", ep_ret_mean, it)
         writer.add_scalar("episode/len_mean", ep_len_mean, it)
-        writer.add_scalar("misc/entropy_coef", stats.entropy_coef, it)
+        writer.add_scalar("train/entropy_coef", stats.entropy_coef, it)
 
         print(
             f"[iter {it}] "
             f"ep_ret={ep_ret_mean:.3f} "
-            f"R_task={r_task_mean:.3f} R_unused={r_unused_mean:.3f} R_step={r_step_mean:.3f} Re={r_terminal_mean:.3f} "
+            # f"R_task={r_task_mean:.3f} R_unused={r_unused_mean:.3f} "
+            f"R_step={r_step_mean:.3f} "
+            f"R_schedule={'NA' if completed_schedule_mean is None else f'{completed_schedule_mean:.3f}'} "
+            f"Re={r_terminal_mean:.3f} "
             f"pi_loss={stats.pi_loss:.4f} v_loss={stats.v_loss:.4f} ent_loss={stats.entropy_loss:.4f} total_loss={stats.total_loss:.4f} "
             f"ent_coef={stats.entropy_coef:.6f}"
         )
@@ -560,7 +579,7 @@ if __name__ == "__main__":
 '''
 PC：
 conda activate dl__py_3.9
-tensorboard --logdir=runs\20260314-161821\tb
+tensorboard --logdir=runs\20260319-114523\tb
 -i https://pypi.tuna.tsinghua.edu.cn/simple
 conda env export > C:/Users/19419/Desktop/研三/物流调度/模型设计/多物料/model_1_七节点多物料汽运/pj_env.yaml
 服务器：

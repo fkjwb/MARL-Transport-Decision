@@ -179,10 +179,24 @@ class VehicleSchedulingEnv:
 
         fi_curr = self.compute_fi_satisfy(self.outstanding, self.vehicle_nodes)
         n_unused_curr = self.compute_n_unused(fi_curr, self.vehicle_nodes, self.vehicle_prev_states)
+        invalid_empty_run_flags = self.compute_invalid_empty_run_flags(
+            tasks_current=self.outstanding,
+            vehicle_nodes=self.vehicle_nodes,
+            vehicle_states=self.vehicle_prev_states,
+            t=t,
+        )
+        invalid_empty_run_by_id = {
+            int(self.vehicle_ids[idx]): int(invalid_empty_run_flags[idx]) for idx in range(self.A)
+        }
+        n_empty_run = int(invalid_empty_run_flags.sum())
+
+        for item in log_actions:
+            item["invalid_empty_run"] = invalid_empty_run_by_id.get(int(item["A_id"]), 0)
 
         r_task = 0.1 * float(tasks_before.sum() - tasks_after.sum())
         r_unused_penalty = -0.2 * float(n_unused_curr)
-        reward = r_task + r_unused_penalty
+        r_empty_run = -0.2 * float(n_empty_run)
+        reward = r_task + r_unused_penalty + r_empty_run
 
         done = (t == self.T - 1)
         re_detail = None
@@ -192,7 +206,7 @@ class VehicleSchedulingEnv:
             if remaining <= 1e-9:
                 re_detail = {
                     "R_base": 8.0,
-                    "R_schedule_penalty": round(-0.05 * self.n_schedule, 3),
+                    "R_schedule_penalty": round(-0.1 * self.n_schedule, 3),
                 }
                 terminate_reason = "completed"
             else:
@@ -214,13 +228,16 @@ class VehicleSchedulingEnv:
             "Jij_k_before": self._tasks_to_nested_dict(tasks_before),
             "Jij_k_after": self._tasks_to_nested_dict(tasks_after),
             "vehicles": log_actions,
+            "N_emptyRun": int(n_empty_run),
             "R_task": round(r_task, 3),
+            "R_emptyRun": round(r_empty_run, 3),
             "R_unused_penalty": round(r_unused_penalty, 3),
-            "R_step": round(r_task + r_unused_penalty, 3),
+            "R_step": round(r_task + r_unused_penalty + r_empty_run, 3),
         }
         if done:
             info["Re"] = re_detail
             info["terminate_reason"] = terminate_reason
+            info["n_schedule"] = int(self.n_schedule)
             info["episode_return"] = round(float(self.episode_return), 3)
 
         self.n_unused_prev = n_unused_curr
@@ -277,6 +294,33 @@ class VehicleSchedulingEnv:
             if fi_satisfy[node_idx] <= 0.5 and state in (STATE_STAY, STATE_MOVE_EMPTY):
                 total += 1
         return total
+
+    def node_has_outgoing_demand_in_window(self, tasks_current: np.ndarray, node_idx: int, t: int) -> bool:
+        if float(tasks_current[node_idx].sum()) > 1e-9:
+            return True
+        for offset in range(1, self.n_obs):
+            future_t = t + offset
+            if future_t >= self.T:
+                break
+            if float(self.spec.demand[future_t, node_idx].sum()) > 1e-9:
+                return True
+        return False
+
+    def compute_invalid_empty_run_flags(
+        self,
+        tasks_current: np.ndarray,
+        vehicle_nodes: np.ndarray,
+        vehicle_states: np.ndarray,
+        t: int,
+    ) -> np.ndarray:
+        flags = np.zeros((self.A,), dtype=np.int64)
+        for idx in range(self.A):
+            if int(vehicle_states[idx]) != STATE_MOVE_EMPTY:
+                continue
+            node_idx = int(vehicle_nodes[idx])
+            if not self.node_has_outgoing_demand_in_window(tasks_current, node_idx, t):
+                flags[idx] = 1
+        return flags
 
     def get_dest_list(self, src_idx: int) -> List[int]:
         return [j for j in range(self.N) if j != src_idx]
