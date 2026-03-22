@@ -379,7 +379,8 @@ def _format_steptrace(tr: Dict[str, Any], it: int, node_ids: List[Any]) -> Dict[
     tr = dict(tr) if tr is not None else {}
     tr.pop("global_step", None)
 
-    for k in ("R_demand", "R_backlog", "R_level23_penalty", "R_step", "Re", "episode_return"):
+    # steps 日志中的 R_t_star 只在命中 T* 的当步写出，避免其他行重复记录 0。
+    for k in ("R_demand", "R_level23_penalty", "R_t_star", "R_step", "Re", "episode_return"):
         if k in tr and tr[k] is not None:
             tr[k] = _round_reward_obj(tr[k])
 
@@ -399,8 +400,8 @@ def _format_steptrace(tr: Dict[str, Any], it: int, node_ids: List[Any]) -> Dict[
         "f",
         "Decision_seq",
         "R_demand",
-        "R_backlog",
         "R_level23_penalty",
+        "R_t_star",
         "R_step",
         "Re",
         "episode_return",
@@ -731,7 +732,7 @@ def main():
         "R_step": 0.0,
         "R_base": 0.0,
         "R_demand": 0.0,
-        "R_backlog": 0.0,
+        "R_t_star": 0.0,
         "R_level23_penalty": 0.0,
         "R_T_left": 0.0,
         "R_f_penalty": 0.0,

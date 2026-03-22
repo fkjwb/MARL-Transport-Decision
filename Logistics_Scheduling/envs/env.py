@@ -330,7 +330,7 @@ def process_belt_actions(
 class RewardParts:
     R_base: float = 0.0
     R_demand: float = 0.0
-    R_backlog: float = 0.0
+    R_t_star: float = 0.0
     R_level23_penalty: float = 0.0
     R_T_left: float = 0.0
     R_f_penalty: float = 0.0
@@ -344,7 +344,7 @@ class RewardParts:
         return RewardParts(
             R_base=float(self.R_base + other.R_base),
             R_demand=float(self.R_demand + other.R_demand),
-            R_backlog=float(self.R_backlog + other.R_backlog),
+            R_t_star=float(self.R_t_star + other.R_t_star),
             R_level23_penalty=float(self.R_level23_penalty + other.R_level23_penalty),
             R_T_left=float(self.R_T_left + other.R_T_left),
             R_f_penalty=float(self.R_f_penalty + other.R_f_penalty),
@@ -357,7 +357,7 @@ class RewardParts:
 
     @property
     def R_step(self) -> float:
-        return float(self.R_demand + self.R_backlog + self.R_level23_penalty)
+        return float(self.R_demand + self.R_t_star + self.R_level23_penalty)
 
     @property
     def R_ultra_limit(self) -> float:
@@ -391,10 +391,11 @@ def compute_reward(
     Y_exo_total: float,
 ) -> RewardParts:
     """每步奖励（非终止步）。"""
-    del Wi_before, f_before, f_after
+    del Wi_before, Yi_before, f_before, f_after
 
-    R_demand = 0.01 * float(Yi_before.sum() - Yi_after.sum())
-    R_backlog = max(-1.0 * (float(Yi_after.sum()) / float(Y_exo_total)),-0.5)
+    # R_demand 直接反映“当前剩余需求 / 总需求”的完成度
+    denom = float(Y_exo_total) if float(Y_exo_total) > 0.0 else 1.0
+    R_demand = 1.0 - (float(Yi_after.sum()) / denom)
 
     node_ids = list(sorted(spec.nodes.keys()))
     lvl23_rows = [i for i, nid in enumerate(node_ids) if int(spec.nodes[nid].level) in (2, 3)]
@@ -423,94 +424,15 @@ def compute_reward(
 
     return RewardParts(
         R_demand=float(R_demand),
-        R_backlog=float(R_backlog),
         R_level23_penalty=float(R_level23_penalty),
     )
 
 
 def compute_t_star_reward(spec: EnvSpec, t_star: int) -> RewardParts:
     """首次达到 T* 时立即支付的时间奖励。"""
+    del spec, t_star
     rp = RewardParts()
-    remain_steps = max(int(spec.T) - 1 - int(t_star), 0)
-    rp.R_T_left = 2.5 * float(remain_steps)
-    return rp
-
-
-def compute_terminal_reward(
-    spec: EnvSpec,
-    node_ids: List[NodeId],
-    lvl1_rows: List[int],
-    lvl23_rows: List[int],
-    W_after: np.ndarray,
-    Y_after: np.ndarray,
-    t: int,
-    f_switch: int,
-    reason: str,
-    Y_exo_total: float,
-    neg_inventory: bool = False,
-    over_ui_rows: Optional[List[int]] = None,
-    lvl23_material_totals: Optional[np.ndarray] = None,
-    over_uk_mats: Optional[List[int]] = None,
-) -> RewardParts:
-    """Terminal reward after moving the T* time bonus to the first-hit step."""
-    del t, lvl23_rows
-
-    rp = RewardParts()
-
-    if reason == "success":
-        rp.R_base = 8.0
-        rp.R_f_penalty = -0.5 * float(f_switch)
-
-        if len(lvl1_rows) > 0:
-            vals = []
-            for r in lvl1_rows:
-                nid = node_ids[r]
-                Ui = float(spec.nodes[nid].Ui) if float(spec.nodes[nid].Ui) > 0 else 1.0
-                total = float(W_after[r, :].sum())
-                vals.append(2.0 * (1.0 - (total / Ui)))
-            rp.R_level1 = float(sum(vals) / float(len(vals)))
-
-    elif reason == "demand_not_fulfill":
-        rp.R_base = 0.0
-        rp.R_f_penalty = -0.5 * float(f_switch)
-
-        unmet = float(Y_after.sum())
-        denom = float(Y_exo_total) if float(Y_exo_total) > 0 else 1.0
-        pen = -20.0 * (unmet / denom)
-        if pen < -5.0:
-            pen = -5.0
-        rp.R_demand_not_fulfilled = float(pen)
-
-    elif reason == "abnormal":
-        rp.R_base = -5.0
-        rp.R_f_penalty = -0.5 * float(f_switch)
-
-        if over_ui_rows:
-            vals = []
-            for r in over_ui_rows:
-                nid = node_ids[r]
-                Ui = float(spec.nodes[nid].Ui) if float(spec.nodes[nid].Ui) > 0 else 1.0
-                total = float(W_after[r, :].sum())
-                exceed = max(total - Ui, 0.0)
-                ratio = exceed / (0.01 * Ui) if Ui > 0 else 0.0
-                vals.append(min(ratio, 5.0))
-            if len(vals) > 0:
-                rp.R_over_Ui = -float(sum(vals) / float(len(vals)))
-
-        if (over_uk_mats is not None) and (lvl23_material_totals is not None):
-            vals = []
-            for k in over_uk_mats:
-                Uk = float(spec.materials[int(k)].Uk) if float(spec.materials[int(k)].Uk) > 0 else 1.0
-                total_k = float(lvl23_material_totals[int(k)])
-                exceed = max(total_k - Uk, 0.0)
-                ratio = exceed / (0.01 * Uk) if Uk > 0 else 0.0
-                vals.append(min(ratio, 5.0))
-            if len(vals) > 0:
-                rp.R_over_Uk = -float(sum(vals) / float(len(vals)))
-
-        if bool(neg_inventory):
-            rp.R_below_0 = -5.0
-
+    rp.R_t_star = 1.0
     return rp
 
 
@@ -536,11 +458,10 @@ def compute_terminal_reward(
     rp = RewardParts()
 
     if reason == "success":
-        rp.R_base = 8.0
-
+        rp.R_base = 6.0
         t_star = int(T_star) if T_star is not None else int(t)
         remain_steps = max(int(spec.T) - 1 - t_star, 0)     # 因为 t_star 取得是t时刻而非第t步
-        rp.R_T_left = 2.5 * float(remain_steps)
+        rp.R_T_left = 3.0 * float(remain_steps)
         rp.R_f_penalty = -0.5 * float(f_switch)
 
         if len(lvl1_rows) > 0:
@@ -610,9 +531,9 @@ class StepTrace:
     B: Any
     Decision_seq: Any
     R_demand: float
-    R_backlog: float
     R_level23_penalty: float
     R_step: float
+    R_t_star: Optional[float] = None
     Re: Optional[Any] = None
     terminate_reason: Optional[str] = None
     terminate_detail: Optional[List[str]] = None
@@ -1400,9 +1321,8 @@ class LogisticsEnv:
         rp_step = compute_reward(spec, Wi_before, W_after, Yi_before, Y_after, f_before, f_after, self._Y_exo_total)
         rp = rp_step
         t_star_before = self._t_star
-        t_star_reward_trace: Optional[Dict[str, Any]] = None
 
-        # 维护 T*：首次满足“执行完当前 t 时刻动作并完成状态转移后，未来所有时刻 Yi 均为 0”的 t 时刻
+        # T* 是首次满足“当前剩余需求为 0，且未来外生需求也全为 0”的时刻。
         if self._t_star is None and self._future_yi_all_zero_after_transition(t, Y_after):
             self._t_star = int(t)
 
@@ -1454,13 +1374,9 @@ class LogisticsEnv:
             rp = rp_step + rp_term
 
         if (not done) and t_star_before is None and self._t_star is not None:
+            # R_t_star 是首次命中 T* 的一次性步奖励，只在首次进入 T* 时发放。
             rp_t_star = compute_t_star_reward(spec, self._t_star)
             rp = rp + rp_t_star
-            if float(rp_t_star.R_T_left) != 0.0:
-                t_star_reward_trace = {
-                    "R_T_left": float(rp_t_star.R_T_left),
-                    "T_star": int(self._t_star),
-                }
 
         # (1)/(2) 仅在最终时刻判定 success / demand_not_fulfill：
         # - success：t+1 == T，且状态转移后所有节点 Yi 均为 0；
@@ -1482,6 +1398,7 @@ class LogisticsEnv:
                 f_switch=f_after,
                 reason=reason,
                 Y_exo_total=self._Y_exo_total,
+                T_star=self._t_star,
             )
             rp = rp + rp_term
 
@@ -1525,8 +1442,6 @@ class LogisticsEnv:
         re_trace: Optional[Dict[str, Any]] = None
         terminate_reason_trace: Optional[str] = None
         terminate_detail_trace: Optional[List[str]] = None
-        if t_star_reward_trace is not None:
-            re_trace = dict(t_star_reward_trace)
         if done:
             terminate_reason_trace = str(reason)
             terminate_detail_trace = terminate_detail
@@ -1569,9 +1484,9 @@ class LogisticsEnv:
                 f=int(self._f_switch),
                 Decision_seq=[self.spec.belt_combo_raw_ids[int(cid)] for cid in belt_order],
                 R_demand=float(rp.R_demand),
-                R_backlog=float(rp.R_backlog),
                 R_level23_penalty=float(rp.R_level23_penalty),
                 R_step=float(rp.R_step),
+                R_t_star=float(rp.R_t_star) if float(rp.R_t_star) != 0.0 else None,
                 Re=re_trace,
                 terminate_reason=terminate_reason_trace,
                 terminate_detail=terminate_detail_trace,
@@ -1591,7 +1506,7 @@ class LogisticsEnv:
             "terminate_detail": terminate_detail,
             "R_base": float(rp.R_base),
             "R_demand": float(rp.R_demand),
-            "R_backlog": float(rp.R_backlog),
+            "R_t_star": float(rp.R_t_star),
             "R_level23_penalty": float(rp.R_level23_penalty),
             "R_step": float(rp.R_step),
             "R_T_left": float(rp.R_T_left),
