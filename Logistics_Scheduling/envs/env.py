@@ -428,6 +428,92 @@ def compute_reward(
     )
 
 
+def compute_t_star_reward(spec: EnvSpec, t_star: int) -> RewardParts:
+    """首次达到 T* 时立即支付的时间奖励。"""
+    rp = RewardParts()
+    remain_steps = max(int(spec.T) - 1 - int(t_star), 0)
+    rp.R_T_left = 2.5 * float(remain_steps)
+    return rp
+
+
+def compute_terminal_reward(
+    spec: EnvSpec,
+    node_ids: List[NodeId],
+    lvl1_rows: List[int],
+    lvl23_rows: List[int],
+    W_after: np.ndarray,
+    Y_after: np.ndarray,
+    t: int,
+    f_switch: int,
+    reason: str,
+    Y_exo_total: float,
+    neg_inventory: bool = False,
+    over_ui_rows: Optional[List[int]] = None,
+    lvl23_material_totals: Optional[np.ndarray] = None,
+    over_uk_mats: Optional[List[int]] = None,
+) -> RewardParts:
+    """Terminal reward after moving the T* time bonus to the first-hit step."""
+    del t, lvl23_rows
+
+    rp = RewardParts()
+
+    if reason == "success":
+        rp.R_base = 8.0
+        rp.R_f_penalty = -0.5 * float(f_switch)
+
+        if len(lvl1_rows) > 0:
+            vals = []
+            for r in lvl1_rows:
+                nid = node_ids[r]
+                Ui = float(spec.nodes[nid].Ui) if float(spec.nodes[nid].Ui) > 0 else 1.0
+                total = float(W_after[r, :].sum())
+                vals.append(2.0 * (1.0 - (total / Ui)))
+            rp.R_level1 = float(sum(vals) / float(len(vals)))
+
+    elif reason == "demand_not_fulfill":
+        rp.R_base = 0.0
+        rp.R_f_penalty = -0.5 * float(f_switch)
+
+        unmet = float(Y_after.sum())
+        denom = float(Y_exo_total) if float(Y_exo_total) > 0 else 1.0
+        pen = -20.0 * (unmet / denom)
+        if pen < -5.0:
+            pen = -5.0
+        rp.R_demand_not_fulfilled = float(pen)
+
+    elif reason == "abnormal":
+        rp.R_base = -5.0
+        rp.R_f_penalty = -0.5 * float(f_switch)
+
+        if over_ui_rows:
+            vals = []
+            for r in over_ui_rows:
+                nid = node_ids[r]
+                Ui = float(spec.nodes[nid].Ui) if float(spec.nodes[nid].Ui) > 0 else 1.0
+                total = float(W_after[r, :].sum())
+                exceed = max(total - Ui, 0.0)
+                ratio = exceed / (0.01 * Ui) if Ui > 0 else 0.0
+                vals.append(min(ratio, 5.0))
+            if len(vals) > 0:
+                rp.R_over_Ui = -float(sum(vals) / float(len(vals)))
+
+        if (over_uk_mats is not None) and (lvl23_material_totals is not None):
+            vals = []
+            for k in over_uk_mats:
+                Uk = float(spec.materials[int(k)].Uk) if float(spec.materials[int(k)].Uk) > 0 else 1.0
+                total_k = float(lvl23_material_totals[int(k)])
+                exceed = max(total_k - Uk, 0.0)
+                ratio = exceed / (0.01 * Uk) if Uk > 0 else 0.0
+                vals.append(min(ratio, 5.0))
+            if len(vals) > 0:
+                rp.R_over_Uk = -float(sum(vals) / float(len(vals)))
+
+        if bool(neg_inventory):
+            rp.R_below_0 = -5.0
+
+    return rp
+
+
 def compute_terminal_reward(
     spec: EnvSpec,
     node_ids: List[NodeId],
@@ -453,7 +539,7 @@ def compute_terminal_reward(
         rp.R_base = 8.0
 
         t_star = int(T_star) if T_star is not None else int(t)
-        remain_steps = max(int(spec.T) - t_star, 0)
+        remain_steps = max(int(spec.T) - 1 - t_star, 0)     # 因为 t_star 取得是t时刻而非第t步
         rp.R_T_left = 2.5 * float(remain_steps)
         rp.R_f_penalty = -0.5 * float(f_switch)
 
@@ -786,6 +872,34 @@ class LogisticsEnv:
                     out.append(exo)
         return out
 
+    def _y_window_flat_carried(self, nid: NodeId, t: int, n: int) -> List[float]:
+        """Demand window flattened to n*K with current unmet demand carried forward."""
+        node = self.spec.nodes[nid]
+        K = self.K
+        out: List[float] = []
+        if node.y is None:
+            return [0.0] * (n * K)
+
+        row = self._node_row(nid)
+        carry_now = np.asarray(self._Yi[row, :], dtype=np.float32).copy()
+        for k in range(K):
+            if k < len(node.y) and t < len(node.y[k]):
+                carry_now[k] += float(node.y[k][t])
+
+        future_cum = np.zeros((K,), dtype=np.float32)
+        for dt in range(n):
+            tt = min(max(t + dt, 0), self.spec.T - 1)
+            for k in range(K):
+                if dt == 0:
+                    out.append(float(carry_now[k]))
+                else:
+                    exo = 0.0
+                    if k < len(node.y) and tt < len(node.y[k]):
+                        exo = float(node.y[k][tt])
+                    future_cum[k] += exo
+                    out.append(float(carry_now[k] + future_cum[k]))
+        return out
+
     def _pi_window_flat(self, nid: NodeId, t: int, n: int) -> List[float]:
         """Pi(i,k,t) 窗口 (t..t+n-1) flatten 到 n*K。"""
         node = self.spec.nodes[nid]
@@ -825,7 +939,7 @@ class LogisticsEnv:
             ]
             feat.extend(self._Wi[srow, :].astype(np.float32).tolist())
             feat.extend(self._Wi[drow, :].astype(np.float32).tolist())
-            feat.extend(self._y_window_flat(edge.dst, t, n))      # n*K
+            feat.extend(self._y_window_flat_carried(edge.dst, t, n))      # n*K
             feat.extend(self._pi_window_flat(edge.src, t, n))     # n*K
 
             trunk_same_dst = int(self._truck_dst_count.get(edge.dst, 0) - 1)
@@ -860,7 +974,7 @@ class LogisticsEnv:
             ])
             feat.extend(self._Wi[srow, :].astype(np.float32).tolist())
             feat.extend(self._Wi[drow, :].astype(np.float32).tolist())
-            feat.extend(self._y_window_flat(e.dst, t, self.n_obs))      # n*K
+            feat.extend(self._y_window_flat_carried(e.dst, t, self.n_obs))      # n*K
             feat.extend(self._pi_window_flat(e.src, t, self.n_obs))     # n*K
 
             feat.append(float(combo.capacity))
@@ -889,7 +1003,7 @@ class LogisticsEnv:
         critic_feat.extend(self._Wi.astype(np.float32).reshape(-1).tolist())
 
         for nid in self.node_ids:      # N
-            critic_feat.extend(self._y_window_flat(nid, t, n))   # 没有 y 自动全 0
+            critic_feat.extend(self._y_window_flat_carried(nid, t, n))   # 没有 y 自动全 0
 
         for nid in self.node_ids:      # N
             critic_feat.extend(self._pi_window_flat(nid, t, n))  # 没有 Pi 自动全 0     # n*K
@@ -904,7 +1018,7 @@ class LogisticsEnv:
 
     def _window_matrix_y(self, nid: NodeId, t: int, n: int) -> List[List[float]]:
         out: List[List[float]] = []
-        flat = self._y_window_flat(nid, t, n)
+        flat = self._y_window_flat_carried(nid, t, n)
         for dt in range(n):
             st = dt * self.K
             out.append([float(v) for v in flat[st: st + self.K]])
@@ -1285,6 +1399,8 @@ class LogisticsEnv:
         # reward（先算当步每步奖励）
         rp_step = compute_reward(spec, Wi_before, W_after, Yi_before, Y_after, f_before, f_after, self._Y_exo_total)
         rp = rp_step
+        t_star_before = self._t_star
+        t_star_reward_trace: Optional[Dict[str, Any]] = None
 
         # 维护 T*：首次满足“执行完当前 t 时刻动作并完成状态转移后，未来所有时刻 Yi 均为 0”的 t 时刻
         if self._t_star is None and self._future_yi_all_zero_after_transition(t, Y_after):
@@ -1318,6 +1434,7 @@ class LogisticsEnv:
         if neg_inventory or (len(over_ui_rows) > 0) or (len(over_uk_mats) > 0):
             done = True
             reason = "abnormal"
+            self._t_star = t_star_before
             rp_term = compute_terminal_reward(
                 spec,
                 node_ids=node_ids,
@@ -1336,10 +1453,19 @@ class LogisticsEnv:
             )
             rp = rp_step + rp_term
 
+        if (not done) and t_star_before is None and self._t_star is not None:
+            rp_t_star = compute_t_star_reward(spec, self._t_star)
+            rp = rp + rp_t_star
+            if float(rp_t_star.R_T_left) != 0.0:
+                t_star_reward_trace = {
+                    "R_T_left": float(rp_t_star.R_T_left),
+                    "T_star": int(self._t_star),
+                }
+
         # (1)/(2) 仅在最终时刻判定 success / demand_not_fulfill：
         # - success：t+1 == T，且状态转移后所有节点 Yi 均为 0；
         # - demand_not_fulfill：t+1 == T，但仍存在未满足需求。
-        elif self._t + 1 == self.spec.T:
+        if (not done) and self._t + 1 == self.spec.T:
             done = True
             if int(Y_after.sum()) == 0:
                 reason = "success"
@@ -1356,9 +1482,8 @@ class LogisticsEnv:
                 f_switch=f_after,
                 reason=reason,
                 Y_exo_total=self._Y_exo_total,
-                T_star=self._t_star,
             )
-            rp = rp_step + rp_term
+            rp = rp + rp_term
 
         # 按统一公式缩放总奖励
         scaled_reward = float(self.reward_scale * rp.total)
@@ -1400,6 +1525,8 @@ class LogisticsEnv:
         re_trace: Optional[Dict[str, Any]] = None
         terminate_reason_trace: Optional[str] = None
         terminate_detail_trace: Optional[List[str]] = None
+        if t_star_reward_trace is not None:
+            re_trace = dict(t_star_reward_trace)
         if done:
             terminate_reason_trace = str(reason)
             terminate_detail_trace = terminate_detail

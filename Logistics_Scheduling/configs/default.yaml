@@ -82,8 +82,8 @@ env:
       Y_exo:
         # - [70, 15, 10, 5,35, 0, 0, 0]       # 下面的可以了换成上面的
         # - [85, 10,  0, 5,10, 0, 0, 0]
-        - [70, 35, 15,15, 5, 0, 0, 0]
-        - [85, 10,  0, 5,10, 0, 0, 0]
+        - [70, 25, 15,15, 5, 0, 0, 0]
+        - [85, 15, 10, 5,10, 0, 0, 0]
 
     - node_id: 7
       name: V7_产线口A
@@ -171,7 +171,7 @@ train:
   # - Fixed coefficient: keep ent_decay as null (coef = ent_coef).
   # - Exponential decay: set ent_decay > 0 (coef_t = ent_coef * exp(-ent_decay * iteration)), e.g. 0.001.
   ent_coef: 0.02
-  ent_decay: 0.002
+  ent_decay: 0.001
   max_grad_norm: 0.5
   optimizer:
     ppo_actor: {betas: [0.9, 0.999], eps: 1.0e-8, weight_decay: 0.0}

@@ -980,7 +980,7 @@ if __name__ == "__main__":
 '''
 PC：
 conda activate dl__py_3.9
-tensorboard --logdir=runs\20260315-184628\tb
+tensorboard --logdir=runs\20260320-094551\tb
 -i https://pypi.tuna.tsinghua.edu.cn/simple
 conda env export > C:/Users/19419/Desktop/研三/物流调度/模型设计/多物料/model_1_七节点多物料汽运/pj_env.yaml
 服务器：
