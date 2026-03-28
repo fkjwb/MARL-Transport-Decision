@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import numpy as np
 import pandas as pd
@@ -12,8 +15,6 @@ import gurobipy as gp
 from gurobipy import GRB
 
 from envs.env import load_yaml, build_env_spec, LogisticsEnv, allowed_mask_for_edge_mode
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.append(str(PROJECT_ROOT))
 
 
 CONFIG_PATH = "configs/default.yaml"
